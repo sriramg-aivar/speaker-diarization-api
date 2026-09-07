@@ -8,6 +8,13 @@ two ways to test:
   test `http://localhost:8000` directly (the pod has `python` but **not**
   `curl`, so in-pod HTTP tests use python).
 
+> ⏱️ **`/diarize` is SLOW on CPU — do NOT press Ctrl+C.** Inference runs on CPU
+> here, so a single `/diarize` call can take **~30-60 seconds** (a ~30s audio
+> clip measured ~44s). With `curl -s` you see nothing while it works, so it
+> *looks* frozen but it is not. Just wait. Use `time curl ...` to watch the
+> elapsed time, or drop `-s` to see curl's transfer progress. `/health` and
+> `/` are instant; only `/diarize` is slow.
+
 Get the pod name once and reuse it:
 
 ```bash
@@ -35,14 +42,18 @@ curl -s http://localhost:8080/
 **Expected:** JSON with `"service": "Speaker Diarization API"` and the list of endpoints.
 
 ### A3. Diarize a real speech file
-Grab a sample (or use your own `.wav`/`.mp3`/`.flac`):
+Use any local `.wav`/`.mp3`/`.flac`. If you don't have one, download a sample
+**once**:
 ```bash
 curl -sL -o speech.wav \
   "https://github.com/pyannote/pyannote-audio/raw/develop/tutorials/assets/sample.wav"
-
-curl -s -F "file=@speech.wav" http://localhost:8080/diarize
 ```
-**Expected:** JSON with detected speakers, e.g.
+Then diarize the local file directly (the `@` means "read this local file"):
+```bash
+# use `time` so you can see it is working, not frozen (takes ~30-60s on CPU)
+time curl -s -F "file=@speech.wav" http://localhost:8080/diarize
+```
+**Do not Ctrl+C — wait for it.** **Expected:** JSON with detected speakers, e.g.
 ```json
 {"num_speakers":3,"speakers":["SPEAKER_00","SPEAKER_01","SPEAKER_02"],"segments":[...]}
 ```
@@ -200,4 +211,8 @@ kubectl describe pod "$POD" | grep -A2 -E "Readiness|Liveness"
 - Synthetic tones (pure sine waves) return `num_speakers: 0` — the model detects
   **human speech**, not arbitrary audio. Use real speech to see speakers.
 - First request after a fresh pod start may take longer while the pipeline warms up.
-- Inference runs on CPU here, so longer audio files take proportionally longer.
+- **Inference runs on CPU here, so `/diarize` takes ~30-60 seconds** (a ~30s clip
+  measured ~44s). This is expected — do not Ctrl+C. Longer audio takes longer.
+  A GPU would make it much faster, but this local kind setup uses CPU only.
+- You do NOT need to re-download the sample every time — reuse the local
+  `speech.wav` with `-F "file=@speech.wav"` (or give a full path).
