@@ -69,6 +69,18 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:8080/diarize
 
 ## B. Tests from inside the pod
 
+> **IMPORTANT — where you run each command:**
+> - `kubectl ...` commands (including `kubectl exec` and `kubectl cp`) run on
+>   **your Mac**, NOT inside the pod. `kubectl` does not exist inside the
+>   container.
+> - Once you are inside the pod (prompt looks like
+>   `root@speaker-diarization-...:/app#`), run commands **directly** —
+>   just `python`, `ls`, etc. Do NOT prefix them with `kubectl` or `$POD`.
+>
+> Two ways to run an in-pod test:
+> - **One-shot from the Mac:** `kubectl exec "$POD" -- <command>`
+> - **Interactive:** `kubectl exec -it "$POD" -- bash`, then run `<command>` directly.
+
 ### B1. Exec into the pod (interactive shell)
 ```bash
 kubectl exec -it "$POD" -- bash
@@ -98,11 +110,18 @@ models--pyannote--wespeaker-voxceleb-resnet34-LM
 This proves the pod runs fully offline (no Hugging Face download at runtime).
 
 ### B4. Copy an audio file into the pod and diarize it
-```bash
-# copy a local file into the running pod
-kubectl cp speech.wav "$POD":/tmp/speech.wav
 
-# run diarization from inside the pod via a multipart POST
+The file must exist **inside** the pod before you can diarize it. The copy
+step runs on your Mac; the diarize step runs inside the pod.
+
+**Step 1 — on your Mac** (copy the file in):
+```bash
+POD=$(kubectl get pods -l app=speaker-diarization -o jsonpath='{.items[0].metadata.name}')
+kubectl cp speech.wav "$POD":/tmp/speech.wav
+```
+
+**Step 2a — one-shot from your Mac** (diarize the copied file):
+```bash
 kubectl exec "$POD" -- python -c "
 import urllib.request, uuid
 boundary=uuid.uuid4().hex
@@ -113,9 +132,24 @@ req=urllib.request.Request('http://localhost:8000/diarize', data=body,
 print(urllib.request.urlopen(req).read().decode())
 "
 ```
-**Expected:** same diarization JSON as A3 (e.g. 3 speakers with segments).
 
-Clean up afterwards:
+**Step 2b — OR interactively from inside the pod** (after `kubectl exec -it "$POD" -- bash`,
+run this directly, WITHOUT `kubectl` or `$POD`):
+```bash
+python -c "
+import urllib.request, uuid
+boundary=uuid.uuid4().hex
+with open('/tmp/speech.wav','rb') as f: data=f.read()
+body=(b'--'+boundary.encode()+b'\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\nContent-Type: audio/wav\r\n\r\n'+data+b'\r\n--'+boundary.encode()+b'--\r\n')
+req=urllib.request.Request('http://localhost:8000/diarize', data=body,
+    headers={'Content-Type':'multipart/form-data; boundary='+boundary})
+print(urllib.request.urlopen(req).read().decode())
+"
+```
+**Expected:** same diarization JSON as A3 (e.g. 3 speakers with segments).
+Give it a few seconds — CPU inference is not instant.
+
+Clean up afterwards (from your Mac):
 ```bash
 kubectl exec "$POD" -- rm -f /tmp/speech.wav
 ```
