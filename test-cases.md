@@ -1,0 +1,169 @@
+# Test Cases — Speaker Diarization API
+
+Every command below was run against the live deployment and works. There are
+two ways to test:
+
+- **A. From outside** — hit the endpoint exposed at `http://localhost:8080`.
+- **B. From inside the pod** — `kubectl exec` into the running container and
+  test `http://localhost:8000` directly (the pod has `python` but **not**
+  `curl`, so in-pod HTTP tests use python).
+
+Get the pod name once and reuse it:
+
+```bash
+POD=$(kubectl get pods -l app=speaker-diarization -o jsonpath='{.items[0].metadata.name}')
+echo "$POD"
+```
+
+---
+
+## A. Tests from outside (via the exposed endpoint)
+
+### A1. Health check
+```bash
+curl -s http://localhost:8080/health
+```
+**Expected:**
+```json
+{"status":"ok","model_loaded":true}
+```
+
+### A2. Service info (root)
+```bash
+curl -s http://localhost:8080/
+```
+**Expected:** JSON with `"service": "Speaker Diarization API"` and the list of endpoints.
+
+### A3. Diarize a real speech file
+Grab a sample (or use your own `.wav`/`.mp3`/`.flac`):
+```bash
+curl -sL -o speech.wav \
+  "https://github.com/pyannote/pyannote-audio/raw/develop/tutorials/assets/sample.wav"
+
+curl -s -F "file=@speech.wav" http://localhost:8080/diarize
+```
+**Expected:** JSON with detected speakers, e.g.
+```json
+{"num_speakers":3,"speakers":["SPEAKER_00","SPEAKER_01","SPEAKER_02"],"segments":[...]}
+```
+
+### A4. Diarize with a fixed number of speakers
+```bash
+curl -s -F "file=@speech.wav" "http://localhost:8080/diarize?num_speakers=2"
+```
+**Expected:** exactly 2 speakers in the response.
+
+### A5. Diarize with a speaker range
+```bash
+curl -s -F "file=@speech.wav" "http://localhost:8080/diarize?min_speakers=1&max_speakers=3"
+```
+**Expected:** between 1 and 3 speakers.
+
+### A6. Error handling — no file uploaded
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:8080/diarize
+```
+**Expected:** `422` (FastAPI validation error — `file` field is required).
+
+---
+
+## B. Tests from inside the pod
+
+### B1. Exec into the pod (interactive shell)
+```bash
+kubectl exec -it "$POD" -- bash
+```
+You're now inside the container. Exit any time with `exit`.
+
+### B2. Health check from inside (uses python, no curl)
+```bash
+kubectl exec "$POD" -- python -c \
+"import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health').read().decode())"
+```
+**Expected:**
+```json
+{"status":"ok","model_loaded":true}
+```
+
+### B3. Confirm the model weights are baked into the image
+```bash
+kubectl exec "$POD" -- ls /root/.cache/torch/pyannote/
+```
+**Expected:** three cached models —
+```
+models--pyannote--speaker-diarization-3.1
+models--pyannote--segmentation-3.0
+models--pyannote--wespeaker-voxceleb-resnet34-LM
+```
+This proves the pod runs fully offline (no Hugging Face download at runtime).
+
+### B4. Copy an audio file into the pod and diarize it
+```bash
+# copy a local file into the running pod
+kubectl cp speech.wav "$POD":/tmp/speech.wav
+
+# run diarization from inside the pod via a multipart POST
+kubectl exec "$POD" -- python -c "
+import urllib.request, uuid
+boundary=uuid.uuid4().hex
+with open('/tmp/speech.wav','rb') as f: data=f.read()
+body=(b'--'+boundary.encode()+b'\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\nContent-Type: audio/wav\r\n\r\n'+data+b'\r\n--'+boundary.encode()+b'--\r\n')
+req=urllib.request.Request('http://localhost:8000/diarize', data=body,
+    headers={'Content-Type':'multipart/form-data; boundary='+boundary})
+print(urllib.request.urlopen(req).read().decode())
+"
+```
+**Expected:** same diarization JSON as A3 (e.g. 3 speakers with segments).
+
+Clean up afterwards:
+```bash
+kubectl exec "$POD" -- rm -f /tmp/speech.wav
+```
+
+### B5. Run the model directly in python (bypassing the API)
+Useful to confirm the pipeline itself loads from the baked cache:
+```bash
+kubectl exec "$POD" -- python -c "
+from pyannote.audio import Pipeline
+p = Pipeline.from_pretrained('pyannote/speaker-diarization-3.1')
+print('pipeline loaded OK:', p is not None)
+"
+```
+**Expected:** `pipeline loaded OK: True` (no token needed — served from cache).
+
+---
+
+## C. Cluster / pod inspection
+
+### C1. Pod status
+```bash
+kubectl get pods -l app=speaker-diarization
+```
+**Expected:** `1/1  Running`.
+
+### C2. Service and port mapping
+```bash
+kubectl get svc speaker-diarization
+```
+**Expected:** `NodePort  80:30080/TCP` (mapped to host `localhost:8080`).
+
+### C3. Live logs (watch requests as they come in)
+```bash
+kubectl logs -f "$POD"
+```
+Send a request from another terminal and watch it get logged.
+
+### C4. Readiness/liveness probe status
+```bash
+kubectl describe pod "$POD" | grep -A2 -E "Readiness|Liveness"
+```
+**Expected:** both probes hitting `/health` on port 8000.
+
+---
+
+## Notes
+
+- Synthetic tones (pure sine waves) return `num_speakers: 0` — the model detects
+  **human speech**, not arbitrary audio. Use real speech to see speakers.
+- First request after a fresh pod start may take longer while the pipeline warms up.
+- Inference runs on CPU here, so longer audio files take proportionally longer.
