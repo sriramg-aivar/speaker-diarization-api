@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Model cache (large, and downloaded via token)
+hf_cache/
+
+# Audio test files
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.ogg
+
+# Secrets / tokens — NEVER commit these
+.env
+.env.*
+!.env.example
+*.token
+*token*
+*secret*
+*.key
+*.pem
+credentials*
+
+# OS / misc
+.DS_Store
+*.log

@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: speaker-diarization
+  labels:
+    app: speaker-diarization
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: speaker-diarization
+  template:
+    metadata:
+      labels:
+        app: speaker-diarization
+    spec:
+      containers:
+        - name: api
+          image: speaker-diarization:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: speaker-diarization
+  labels:
+    app: speaker-diarization
+spec:
+  type: NodePort
+  selector:
+    app: speaker-diarization
+  ports:
+    - port: 80
+      targetPort: 8000
+      nodePort: 30080

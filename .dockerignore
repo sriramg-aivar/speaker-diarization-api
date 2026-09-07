@@ -1,0 +1,14 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+.venv/
+venv/
+hf_cache/
+*.wav
+*.mp3
+*.flac
+.DS_Store
+.env
+k8s/
+README.md
